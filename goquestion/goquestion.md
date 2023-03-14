@@ -112,11 +112,19 @@ v1.1版本之前
 
 新建协程会放入全局队列，每次从全局队列取G来执行，但是由于M可能存在多个，所以会出现并发问题，要取的时候要加锁
 
+即M：1 = 内核线程：协程
+
 ![img](https://upload-images.jianshu.io/upload_images/20049531-72bcc636660425f1.png?imageMogr2/auto-orient/strip|imageView2/2/w/1080/format/webp)
 
 v1.1之后
 
 ![img](https://upload-images.jianshu.io/upload_images/20049531-8d0228ecd880c61e.png?imageMogr2/auto-orient/strip|imageView2/2/w/720/format/webp)
+
+M：N= 内核线程：协程
+
+p对应设置的内核个数
+
+内核指的是cpu核心，内核数量和内核线程数量没关系
 
 新建协程G会优先放到本地队列，本地队列P满了，就会分一半到全局队列，本地队列为空时，就会从全局队列中取，如果全局队列为空的话，就会从其他本地队列中拿一半的协程G放到自己的本地队列P中，如果中途协程阻塞了，本地队列P会在其他的内核线程上执行
 
@@ -150,4 +158,52 @@ G0是每次启动一个M都会第一个创建的协程，G0仅负责调度G，G0
 
 # 3.Chan底层原理
 
-chan底层是一个huanxing
+## chan底层是一个环形队列
+
+type hchan struct {
+  qcount   uint  // 队列中的总元素个数
+  dataqsiz uint  // 环形队列大小，即可存放元素的个数
+  buf      unsafe.Pointer // 环形队列指针
+  elemsize uint16  //每个元素的大小
+  closed   uint32  //标识关闭状态
+  elemtype *_type // 元素类型
+  sendx    uint   // 发送索引，元素写入时存放到队列中的位置
+  recvx    uint   // 接收索引，元素从队列的该位置读出
+  recvq    waitq  // 等待读消息的goroutine队列
+  sendq    waitq  // 等待写消息的goroutine队列
+  lock mutex  //互斥锁，chan不允许并发读写
+}
+
+![img](https://static001.geekbang.org/infoq/1d/1da74e858e9fc324cf85dcf9993b4a28.png)
+
+## 等待队列
+
+1.从channel中读取数据，如果channel的缓冲区为空，或者所没有缓冲区，那么当前协程会被阻塞
+
+2.向channel中写入数据，如果channel的缓冲区已满，或者没有缓冲区，那么当前协程会被阻塞
+
+3.被阻塞的协程会挂在channel的等待队列中
+
+因为读所导致的阻塞，会被向channel写入数据的协程所唤醒
+
+因为写所导致的阻塞，会被从channel读取数据的协程所唤醒
+
+如图，没有缓冲区的channel，recvq有几个协程在等待读数据
+
+![img](https://static001.geekbang.org/infoq/94/94f04c16549b9826013e5b3e48281842.png)
+
+所以，在一般情况下recvq和sendq至少有一个为空，只有一个例外，即同一个协程使用select语句，一边向channel写数据，一些读数据
+
+## 类型信息
+
+一个channel只能传递一种类型的值，类型信息存储在数据结构hchan中
+
+elemsize:类型大小,用于在buf中定位元素位置
+
+elemtype:类型，用于传递数据过程中赋值
+
+## 锁
+
+channel是并发安全的，一个channel同时只允许被一个协程读写
+
+## channel读写
